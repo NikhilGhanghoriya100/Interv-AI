@@ -17,7 +17,7 @@ import Footer from "../components/Footer";
 import { useDispatch, useSelector } from "react-redux";
 import { setUserData } from "../redux/userSlice";
 
-export const ServerUrl = "http://localhost:8000";
+export const ServerUrl = import.meta.env.VITE_SERVER_URL || "http://localhost:8000";
 
 function Step1SetUp({ onStart }) {
   const [role, setRole] = useState("");
