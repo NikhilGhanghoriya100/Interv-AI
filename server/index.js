@@ -9,8 +9,8 @@ import userRouter from "./routes/user.route.js";
 import interviewRouter from "./routes/interview.route.js"
 import paymentRouter from "./routes/payment.route.js";
 
-import dns from 'dns';
-dns.setServers(["1.1.1.1", "8.8.8.8"]);
+// import dns from 'dns';
+// dns.setServers(["1.1.1.1", "8.8.8.8"]);
 
 
 const app = express()
