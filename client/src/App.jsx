@@ -12,7 +12,7 @@ import { setUserData } from "./redux/userSlice";
 import Pricing from "./pages/Pricing";
 
 
-export const ServerUrl = import.meta.env.VITE_SERVER_URL || "http://localhost:8000"
+export const ServerUrl = "https://interv-ai-e1oh.onrender.com"
 
 function App() {
 
