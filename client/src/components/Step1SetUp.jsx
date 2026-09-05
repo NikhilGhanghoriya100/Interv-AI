@@ -414,13 +414,21 @@ function Step1SetUp({ onStart }) {
                             <ul className="space-y-1.5">
 
                               {projects.map((project, i) => (
-                                <li
-                                  key={i}
-                                  className="text-sm text-slate-600"
-                                >
-                                  • {project}
-                                </li>
-                              ))}
+  <li
+    key={i}
+    className="text-sm text-slate-600"
+  >
+    <span className="font-medium text-slate-700">
+      • {project.name}
+    </span>
+
+    {project.description && (
+      <span className="text-slate-500">
+        {" — "}{project.description}
+      </span>
+    )}
+  </li>
+))}
 
                             </ul>
 
