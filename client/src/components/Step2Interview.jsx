@@ -19,11 +19,14 @@ function Step2Interview({ interviewData, onFinish }) {
   const [isCameraOn, setIsCameraOn] = useState(true);
   const [cameraError, setCameraError] = useState("");
   
-  const recognitionRef = useRef(null); 
+  const recognitionRef = useRef(null);
 const finalTranscriptRef = useRef("");
 const isMicOnRef = useRef(true);
 const isAIPlayingRef = useRef(false);
-
+const isRecognitionRunningRef = useRef(false);
+const shouldRestartRecognitionRef = useRef(false);
+const isSubmittingRef = useRef(false);
+const lastFinalTextRef = useRef("");
   
   const [isAIPlaying, setIsAIPlaying] = useState(false); 
 
@@ -286,89 +289,150 @@ useEffect(() => {
 
   recognition.lang = "en-US";
 
-  // Keep recognition running while candidate speaks
-  recognition.continuous = true;
+  // IMPORTANT:
+  // Mobile browsers are much more reliable with non-continuous mode.
+  recognition.continuous = false;
 
-  // We need interim results only for recognition,
-  // but we will NOT append interim results to answer.
-  recognition.interimResults = true;
+  // We only save FINAL results.
+  recognition.interimResults = false;
 
   recognition.maxAlternatives = 1;
 
   recognition.onstart = () => {
+    isRecognitionRunningRef.current = true;
     console.log("🎤 Speech recognition started");
   };
 
   recognition.onresult = (event) => {
-    let finalText = "";
+    let newFinalText = "";
 
-    // Process only NEW results
-    for (let i = event.resultIndex; i < event.results.length; i++) {
-      const transcript = event.results[i][0].transcript.trim();
+    for (let i = 0; i < event.results.length; i++) {
+      const result = event.results[i];
+
+      if (!result.isFinal) continue;
+
+      const transcript = result[0]?.transcript?.trim();
 
       if (!transcript) continue;
 
-      // VERY IMPORTANT:
-      // Only final results go into answer.
-      if (event.results[i].isFinal) {
-        finalText += transcript + " ";
-      }
+      newFinalText += " " + transcript;
     }
 
-    if (finalText.trim()) {
-      const cleanedText = finalText.trim();
+    newFinalText = newFinalText.trim();
 
-      finalTranscriptRef.current = (
-        finalTranscriptRef.current +
-        " " +
-        cleanedText
-      ).trim();
+    if (!newFinalText) return;
 
-      setAnswer(finalTranscriptRef.current);
+    /*
+      MOBILE DUPLICATE FIX
+
+      Some Android Chrome versions can return the same
+      final sentence again after recognition restarts.
+    */
+    const normalizedNewText = newFinalText
+      .toLowerCase()
+      .replace(/[.,!?;:'"]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    const normalizedLastText = lastFinalTextRef.current
+      .toLowerCase()
+      .replace(/[.,!?;:'"]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    // Ignore exact duplicate result
+    if (
+      normalizedNewText &&
+      normalizedNewText === normalizedLastText
+    ) {
+      console.log("🚫 Duplicate speech ignored:", newFinalText);
+      return;
     }
+
+    lastFinalTextRef.current = newFinalText;
+
+    finalTranscriptRef.current = (
+      finalTranscriptRef.current +
+      " " +
+      newFinalText
+    ).trim();
+
+    setAnswer(finalTranscriptRef.current);
+
+    console.log("✅ Final transcript:", newFinalText);
   };
 
   recognition.onerror = (event) => {
     console.warn("Speech recognition error:", event.error);
 
-    // These errors are normal and should not break the interview
+    isRecognitionRunningRef.current = false;
+
+    if (event.error === "not-allowed") {
+      isMicOnRef.current = false;
+      shouldRestartRecognitionRef.current = false;
+      setIsMicOn(false);
+      return;
+    }
+
+    if (event.error === "service-not-allowed") {
+      isMicOnRef.current = false;
+      shouldRestartRecognitionRef.current = false;
+      setIsMicOn(false);
+      return;
+    }
+
+    // no-speech / aborted are normal on mobile
     if (
       event.error === "no-speech" ||
       event.error === "aborted"
     ) {
       return;
     }
-
-    if (event.error === "not-allowed") {
-      console.error("Microphone permission denied.");
-      setIsMicOn(false);
-      isMicOnRef.current = false;
-    }
   };
 
   recognition.onend = () => {
+    isRecognitionRunningRef.current = false;
+
     console.log("🎤 Speech recognition ended");
 
-    // Chrome can automatically stop continuous recognition.
-    // Restart only when candidate mic should still be active.
+    /*
+      Mobile Chrome automatically ends recognition after a pause.
+
+      Restart ONLY if:
+      - mic is ON
+      - AI is not speaking
+      - answer is not being submitted
+      - restart is actually wanted
+    */
     if (
       isMicOnRef.current &&
       !isAIPlayingRef.current &&
-      !isSubmitting
+      !isSubmittingRef.current &&
+      shouldRestartRecognitionRef.current
     ) {
       setTimeout(() => {
-        try {
-          recognition.start();
-        } catch (error) {
-          // Already running - ignore
+        if (
+          isMicOnRef.current &&
+          !isAIPlayingRef.current &&
+          !isSubmittingRef.current &&
+          !isRecognitionRunningRef.current
+        ) {
+          try {
+            recognition.start();
+          } catch (error) {
+            console.log("Recognition restart skipped");
+          }
         }
-      }, 200);
+      }, 300);
     }
   };
 
   recognitionRef.current = recognition;
 
   return () => {
+    shouldRestartRecognitionRef.current = false;
+    isRecognitionRunningRef.current = false;
+
     try {
       recognition.onresult = null;
       recognition.onerror = null;
@@ -382,106 +446,179 @@ useEffect(() => {
   };
 }, []);
 
-  // const startMic = () => {
-  //   if(recognitionRef.current && !isAIPlaying){
-  //     try{
-  //       recognitionRef.current.start();
-  //     } catch(error){
+  
 
-  //     }
-  //   }
-  // };
+//     const startMic = () => {
+//   if (!recognitionRef.current) return;
+//   if (isAIPlayingRef.current) return;
 
-    const startMic = () => {
+//   isMicOnRef.current = true;
+
+//   try {
+//     recognitionRef.current.start();
+//   } catch (error) {
+//     // SpeechRecognition throws if it is already running.
+//     // Ignore that case.
+//   }
+// };
+
+  const startMic = () => {
   if (!recognitionRef.current) return;
   if (isAIPlayingRef.current) return;
+  if (isSubmittingRef.current) return;
 
   isMicOnRef.current = true;
+  shouldRestartRecognitionRef.current = true;
+
+  if (isRecognitionRunningRef.current) {
+    return;
+  }
 
   try {
     recognitionRef.current.start();
   } catch (error) {
-    // SpeechRecognition throws if it is already running.
-    // Ignore that case.
+    // Already running - ignore
   }
 };
 
 
-  // const stopMic = () => {
-  //   if(recognitionRef.current){
-  //     try{
-  //       recognitionRef.current.stop();
-  //     } catch(error){
+ 
+//   const stopMic = () => {
+//   if (!recognitionRef.current) return;
 
-  //     }
-  //   }
-  // };
+//   try {
+//     recognitionRef.current.stop();
+//   } catch (error) {
+//     // Ignore if recognition is already stopped
+//   }
+// };
 
   const stopMic = () => {
   if (!recognitionRef.current) return;
 
+  // VERY IMPORTANT:
+  // Prevent onend from automatically starting recognition again.
+  shouldRestartRecognitionRef.current = false;
+
   try {
     recognitionRef.current.stop();
   } catch (error) {
-    // Ignore if recognition is already stopped
+    // Ignore if already stopped
   }
 };
 
 
 
 
-  // const toggleMic = () => {
-  //   if (isMicOn) {
-  //     stopMic();
-  //     setIsMicOn(false);
-  //   } else {
-  //     startMic();
-  //     setIsMicOn(true);
-  //   }
-  // };
+  
+
+//   const toggleMic = () => {
+//   if (isMicOn) {
+//     isMicOnRef.current = false;
+//     stopMic();
+//     setIsMicOn(false);
+//   } else {
+//     isMicOnRef.current = true;
+//     setIsMicOn(true);
+
+//     setTimeout(() => {
+//       startMic();
+//     }, 100);
+//   }
+// };
 
   const toggleMic = () => {
   if (isMicOn) {
     isMicOnRef.current = false;
+    shouldRestartRecognitionRef.current = false;
+
     stopMic();
     setIsMicOn(false);
   } else {
     isMicOnRef.current = true;
+    shouldRestartRecognitionRef.current = true;
+
     setIsMicOn(true);
 
     setTimeout(() => {
       startMic();
-    }, 100);
+    }, 200);
   }
 };
 
 
-  const submitAnswer = async () => {
-    if(isSubmitting) return;
-    stopMic();
-    setIsSubmitting(true);
+  // const submitAnswer = async () => {
+  //   if(isSubmitting) return;
+  //   stopMic();
+  //   setIsSubmitting(true);
 
-    try{
-      const result = await axios.post(ServerUrl + "/api/interview/submit-answer", {
+const submitAnswer = async () => {
+  if (isSubmittingRef.current) return;
+
+  isSubmittingRef.current = true;
+
+  // Speech recognition ko submit ke time stop karo
+  shouldRestartRecognitionRef.current = false;
+  stopMic();
+
+  setIsSubmitting(true);
+
+  try {
+    const result = await axios.post(
+      ServerUrl + "/api/interview/submit-answer",
+      {
         interviewId,
         questionIndex: currentIndex,
         answer,
-        timeTaken: currentQuestion ? (currentQuestion.timeLimit - timeLeft) : 0,
-      }, {withCredentials:true});
+        timeTaken: currentQuestion
+          ? currentQuestion.timeLimit - timeLeft
+          : 0,
+      },
+      { withCredentials: true }
+    );
 
-      setFeedback(result.data.feedback);
-      speakText(result.data.feedback);
-      setIsSubmitting(false);
-    } catch(error){
-      console.error("Error submitting answer:", error);
-      setIsSubmitting(false);
+    setFeedback(result.data.feedback);
+
+    // AI feedback bolega
+    await speakText(result.data.feedback);
+
+    setIsSubmitting(false);
+    isSubmittingRef.current = false;
+
+    // User ka mic ON tha to wapas start karo
+    if (isMicOnRef.current) {
+      shouldRestartRecognitionRef.current = true;
+
+      setTimeout(() => {
+        startMic();
+      }, 300);
+    }
+
+  } catch (error) {
+    console.error("Error submitting answer:", error);
+
+    setIsSubmitting(false);
+    isSubmittingRef.current = false;
+
+    // Error ke baad bhi mic ON tha to restart
+    if (isMicOnRef.current) {
+      shouldRestartRecognitionRef.current = true;
+
+      setTimeout(() => {
+        startMic();
+      }, 300);
     }
   }
+};
+  
+const handleNext = async () => {
+  stopMic();
 
-  const handleNext = async ()=>{
-    finalTranscriptRef.current = "";
-    setAnswer("");
-    setFeedback("");
+  finalTranscriptRef.current = "";
+  lastFinalTextRef.current = "";
+
+  setAnswer("");
+  setFeedback("");
 
     if (currentIndex + 1 >= questions.length){
       await finishInterview();
@@ -491,9 +628,12 @@ useEffect(() => {
     await speakText("Alright, let's move to the next question.");
 
     setCurrentIndex(currentIndex + 1);
-    setTimeout(() => {
-      if (isMicOn) startMic();
-    }, 500);
+
+setTimeout(() => {
+  if (isMicOnRef.current) {
+    startMic();
+  }
+}, 500);
 
   }
 
