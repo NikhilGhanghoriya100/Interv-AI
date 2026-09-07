@@ -18,7 +18,13 @@ function Step2Interview({ interviewData, onFinish }) {
   const [isMicOn, setIsMicOn] = useState(true); 
   const [isCameraOn, setIsCameraOn] = useState(true);
   const [cameraError, setCameraError] = useState("");
+  
   const recognitionRef = useRef(null); 
+const finalTranscriptRef = useRef("");
+const isMicOnRef = useRef(true);
+const isAIPlayingRef = useRef(false);
+
+  
   const [isAIPlaying, setIsAIPlaying] = useState(false); 
 
   const [currentIndex, setCurrentIndex] = useState(0); 
@@ -86,6 +92,14 @@ function Step2Interview({ interviewData, onFinish }) {
       stopCamera();
     };
   }, []);
+
+  useEffect(() => {
+  isAIPlayingRef.current = isAIPlaying;
+}, [isAIPlaying]);
+
+useEffect(() => {
+  isMicOnRef.current = isMicOn;
+}, [isMicOn]);
 
   useEffect(() => {
     if (isCameraOn && userVideoRef.current && streamRef.current) {
@@ -166,20 +180,26 @@ function Step2Interview({ interviewData, onFinish }) {
         videoRef.current?.play();
       };
 
-      utterance.onend = () => {
-        videoRef.current?.pause();
-        if (videoRef.current) videoRef.current.currentTime = 0;
-        setIsAIPlaying(false);
+    utterance.onend = () => {
+  videoRef.current?.pause();
 
-        if(isMicOn){
-          startMic(); // Restart the microphone when AI finishes speaking
-        }
+  if (videoRef.current) {
+    videoRef.current.currentTime = 0;
+  }
 
-        setTimeout(() => {
-          setSubtitle("");
-          resolve();
-        }, 300);
-      };
+  setIsAIPlaying(false);
+
+  if (isMicOnRef.current) {
+    setTimeout(() => {
+      startMic();
+    }, 200);
+  }
+
+  setTimeout(() => {
+    setSubtitle("");
+    resolve();
+  }, 300);
+};
 
       utterance.onerror = () => {
         setIsAIPlaying(false);
@@ -250,55 +270,190 @@ function Step2Interview({ interviewData, onFinish }) {
     }
   }, [currentIndex]);
 
+useEffect(() => {
+  if (
+    !("webkitSpeechRecognition" in window) &&
+    !("SpeechRecognition" in window)
+  ) {
+    console.warn("Speech Recognition is not supported in this browser.");
+    return;
+  }
 
-  useEffect(() => {
-    if(!("webkitSpeechRecognition" in window) && !("SpeechRecognition" in window)) return;
+  const SpeechRecognition =
+    window.SpeechRecognition || window.webkitSpeechRecognition;
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognition.lang = "en-US";
-    recognition.continuous = true;
-    recognition.interimResults = true;
+  const recognition = new SpeechRecognition();
 
-    recognition.onresult = (event) => {
-      const transcript = event.results[event.results.length - 1][0].transcript;
-      setAnswer((prev) => prev ? prev + " " + transcript : transcript);
-    };
+  recognition.lang = "en-US";
 
-    recognitionRef.current = recognition;
-  },[]);
+  // Keep recognition running while candidate speaks
+  recognition.continuous = true;
 
-  const startMic = () => {
-    if(recognitionRef.current && !isAIPlaying){
-      try{
-        recognitionRef.current.start();
-      } catch(error){
+  // We need interim results only for recognition,
+  // but we will NOT append interim results to answer.
+  recognition.interimResults = true;
 
+  recognition.maxAlternatives = 1;
+
+  recognition.onstart = () => {
+    console.log("🎤 Speech recognition started");
+  };
+
+  recognition.onresult = (event) => {
+    let finalText = "";
+
+    // Process only NEW results
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const transcript = event.results[i][0].transcript.trim();
+
+      if (!transcript) continue;
+
+      // VERY IMPORTANT:
+      // Only final results go into answer.
+      if (event.results[i].isFinal) {
+        finalText += transcript + " ";
       }
+    }
+
+    if (finalText.trim()) {
+      const cleanedText = finalText.trim();
+
+      finalTranscriptRef.current = (
+        finalTranscriptRef.current +
+        " " +
+        cleanedText
+      ).trim();
+
+      setAnswer(finalTranscriptRef.current);
     }
   };
 
+  recognition.onerror = (event) => {
+    console.warn("Speech recognition error:", event.error);
+
+    // These errors are normal and should not break the interview
+    if (
+      event.error === "no-speech" ||
+      event.error === "aborted"
+    ) {
+      return;
+    }
+
+    if (event.error === "not-allowed") {
+      console.error("Microphone permission denied.");
+      setIsMicOn(false);
+      isMicOnRef.current = false;
+    }
+  };
+
+  recognition.onend = () => {
+    console.log("🎤 Speech recognition ended");
+
+    // Chrome can automatically stop continuous recognition.
+    // Restart only when candidate mic should still be active.
+    if (
+      isMicOnRef.current &&
+      !isAIPlayingRef.current &&
+      !isSubmitting
+    ) {
+      setTimeout(() => {
+        try {
+          recognition.start();
+        } catch (error) {
+          // Already running - ignore
+        }
+      }, 200);
+    }
+  };
+
+  recognitionRef.current = recognition;
+
+  return () => {
+    try {
+      recognition.onresult = null;
+      recognition.onerror = null;
+      recognition.onend = null;
+      recognition.stop();
+    } catch (error) {
+      // Ignore cleanup errors
+    }
+
+    recognitionRef.current = null;
+  };
+}, []);
+
+  // const startMic = () => {
+  //   if(recognitionRef.current && !isAIPlaying){
+  //     try{
+  //       recognitionRef.current.start();
+  //     } catch(error){
+
+  //     }
+  //   }
+  // };
+
+    const startMic = () => {
+  if (!recognitionRef.current) return;
+  if (isAIPlayingRef.current) return;
+
+  isMicOnRef.current = true;
+
+  try {
+    recognitionRef.current.start();
+  } catch (error) {
+    // SpeechRecognition throws if it is already running.
+    // Ignore that case.
+  }
+};
+
+
+  // const stopMic = () => {
+  //   if(recognitionRef.current){
+  //     try{
+  //       recognitionRef.current.stop();
+  //     } catch(error){
+
+  //     }
+  //   }
+  // };
 
   const stopMic = () => {
-    if(recognitionRef.current){
-      try{
-        recognitionRef.current.stop();
-      } catch(error){
+  if (!recognitionRef.current) return;
 
-      }
-    }
-  };
+  try {
+    recognitionRef.current.stop();
+  } catch (error) {
+    // Ignore if recognition is already stopped
+  }
+};
 
+
+
+
+  // const toggleMic = () => {
+  //   if (isMicOn) {
+  //     stopMic();
+  //     setIsMicOn(false);
+  //   } else {
+  //     startMic();
+  //     setIsMicOn(true);
+  //   }
+  // };
 
   const toggleMic = () => {
-    if (isMicOn) {
-      stopMic();
-      setIsMicOn(false);
-    } else {
+  if (isMicOn) {
+    isMicOnRef.current = false;
+    stopMic();
+    setIsMicOn(false);
+  } else {
+    isMicOnRef.current = true;
+    setIsMicOn(true);
+
+    setTimeout(() => {
       startMic();
-      setIsMicOn(true);
-    }
-  };
+    }, 100);
+  }
+};
 
 
   const submitAnswer = async () => {
@@ -324,6 +479,7 @@ function Step2Interview({ interviewData, onFinish }) {
   }
 
   const handleNext = async ()=>{
+    finalTranscriptRef.current = "";
     setAnswer("");
     setFeedback("");
 
