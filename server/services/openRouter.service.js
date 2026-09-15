@@ -43,7 +43,7 @@ export const askAi = async (messages) => {
             {
                 model: "openai/gpt-4o-mini",
                 messages: messages,
-                max_tokens: 500
+                max_tokens: 1000
             },
             {
                 headers: {
